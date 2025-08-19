@@ -1,0 +1,14 @@
+# Dependencias principales para el proyecto MDVSP
+numpy>=1.21.0
+memory-profiler>=0.60.0
+
+# Dependencias para desarrollo y testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+black>=22.0.0
+flake8>=5.0.0
+mypy>=0.991
+
+# Dependencias opcionales para optimización
+numba>=0.56.0
+scipy>=1.9.0
