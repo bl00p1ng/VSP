@@ -19,7 +19,7 @@ class VSPDataLoader:
     Implementa restricciones de factibilidad temporal y de conexión.
     """
     
-    def __init__(self, directorio_instancias: str = "instancias_vsp") -> None:
+    def __init__(self, directorio_instancias: str = "fischetti") -> None:
         """
         Inicializa el cargador con el directorio de instancias.
         
@@ -57,6 +57,64 @@ class VSPDataLoader:
         instancias_completas = sorted(archivos_cst.intersection(archivos_tim))
         return instancias_completas
     
+    @profile
+    def cargar_instancia_desde_archivos(self, archivo_cst: str, archivo_tim: str) -> VSPData:
+        """
+        Carga una instancia VSP desde archivos específicos.
+        
+        Args:
+            archivo_cst: Path completo al archivo .cst
+            archivo_tim: Path completo al archivo .tim
+            
+        Returns:
+            Objeto VSPData con todos los datos cargados
+            
+        Raises:
+            FileNotFoundError: Si algún archivo no existe
+            ValueError: Si hay errores en el formato de los datos
+        """
+        inicio_tiempo = time.perf_counter()
+        
+        archivo_cst_path = Path(archivo_cst)
+        archivo_tim_path = Path(archivo_tim)
+        
+        # Valida que los archivos existan
+        if not archivo_cst_path.exists():
+            raise FileNotFoundError(f"Archivo .cst no encontrado: {archivo_cst_path}")
+        
+        if not archivo_tim_path.exists():
+            raise FileNotFoundError(f"Archivo .tim no encontrado: {archivo_tim_path}")
+        
+        try:
+            # Carga datos básicos
+            matriz_costos_base, deposito, numero_servicios = self._cargar_archivo_cst_individual(archivo_cst_path)
+            servicios = self._cargar_archivo_tim_individual(archivo_tim_path, numero_servicios)
+            
+            # Construye matriz de costos con restricciones VSP
+            matriz_costos_final = self._construir_matriz_vsp(
+                matriz_costos_base, deposito, servicios, numero_servicios
+            )
+            
+            # Nombre de instancia basado en archivos
+            nombre_instancia = archivo_cst_path.stem
+            
+            # Crea la instancia VSP completa
+            instancia = VSPData(
+                nombre_instancia=nombre_instancia,
+                numero_servicios=numero_servicios,
+                deposito=deposito,
+                servicios=servicios,
+                matriz_costos=matriz_costos_final
+            )
+            
+            tiempo_total = time.perf_counter() - inicio_tiempo
+            print(f"Instancia VSP '{nombre_instancia}' cargada en {tiempo_total:.4f} segundos")
+            
+            return instancia
+            
+        except Exception as e:
+            raise ValueError(f"Error cargando instancia VSP desde archivos: {str(e)}") from e
+
     @profile
     def cargar_instancia(self, nombre_instancia: str) -> VSPData:
         """
@@ -312,6 +370,88 @@ class VSPDataLoader:
         # Si el tiempo de desplazamiento es infactible, no puede conectarse
         if tiempo_desplazamiento >= 100000000.0:
             return False
+    
+    def _cargar_archivo_cst_individual(self, archivo_cst: Path) -> Tuple[np.ndarray, DepositoVSP, int]:
+        """
+        Carga el archivo .cst individual con matriz de costos e información del depósito.
+        
+        Args:
+            archivo_cst: Path al archivo .cst
+            
+        Returns:
+            Tuple con matriz de costos básica, depósito y número de servicios
+        """
+        with open(archivo_cst, 'r', encoding='utf-8') as archivo:
+            try:
+                # Lee la primera línea: num_servicios num_vehiculos_deposito
+                primera_linea = archivo.readline().strip().split()
+                
+                if len(primera_linea) < 2:
+                    raise ValueError("Primera línea debe contener número de servicios y vehículos")
+                
+                numero_servicios = int(primera_linea[0])
+                numero_vehiculos = int(primera_linea[1])
+                
+                if numero_servicios <= 0:
+                    raise ValueError("Número de servicios debe ser positivo")
+                if numero_vehiculos <= 0:
+                    raise ValueError("Número de vehículos debe ser positivo")
+                
+                # Crea el depósito único
+                deposito = DepositoVSP(
+                    id_deposito=0,
+                    numero_vehiculos=numero_vehiculos,
+                    nombre_deposito=f"Deposito_{archivo_cst.stem}"
+                )
+                
+                # Lee matriz de costos (servicios + 1 para depósito)
+                matriz_costos_base = self._leer_matriz_costos(archivo, numero_servicios + 1)
+                
+                return matriz_costos_base, deposito, numero_servicios
+                
+            except (ValueError, IndexError) as e:
+                raise ValueError(f"Error en formato del archivo {archivo_cst}: {str(e)}") from e
+    
+    def _cargar_archivo_tim_individual(self, archivo_tim: Path, numero_servicios: int) -> List[Servicio]:
+        """
+        Carga el archivo .tim individual con tiempos de servicios.
+        
+        Args:
+            archivo_tim: Path al archivo .tim
+            numero_servicios: Número esperado de servicios
+            
+        Returns:
+            Lista de objetos Servicio
+        """
+        with open(archivo_tim, 'r', encoding='utf-8') as archivo:
+            try:
+                contenido = archivo.read()
+                valores = contenido.split()
+                
+                if len(valores) != 2 * numero_servicios:
+                    raise ValueError(f"Número de tiempos ({len(valores)}) "
+                                   f"no coincide con servicios esperados ({2 * numero_servicios})")
+                
+                # Separa tiempos de inicio y fin
+                tiempos_inicio = [int(valores[i]) for i in range(numero_servicios)]
+                tiempos_fin = [int(valores[i + numero_servicios]) for i in range(numero_servicios)]
+                
+                # Crea objetos Servicio
+                servicios = []
+                for i in range(numero_servicios):
+                    servicio = Servicio(
+                        id_servicio=i,
+                        tiempo_inicio=tiempos_inicio[i],
+                        tiempo_fin=tiempos_fin[i],
+                        ubicacion_inicio=f"Inicio_{i}",
+                        ubicacion_fin=f"Fin_{i}"
+                    )
+                    servicios.append(servicio)
+                
+                return servicios
+                
+            except (ValueError, IndexError) as e:
+                raise ValueError(f"Error en formato del archivo {archivo_tim}: {str(e)}") from e
         
         # Verifica que el servicio origen termine + tiempo desplazamiento <= inicio servicio destino
         tiempo_llegada = servicio_origen.tiempo_fin + tiempo_desplazamiento
