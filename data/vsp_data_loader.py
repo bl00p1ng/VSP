@@ -330,10 +330,6 @@ class VSPDataLoader:
                 contenido = archivo.read()
                 valores = contenido.split()
                 
-                if len(valores) != 2 * numero_servicios:
-                    raise ValueError(f"Número de tiempos ({len(valores)}) "
-                                   f"no coincide con servicios esperados ({2 * numero_servicios})")
-                
                 # Separa tiempos de inicio y fin
                 tiempos_inicio = [int(valores[i]) for i in range(numero_servicios)]
                 tiempos_fin = [int(valores[i + numero_servicios]) for i in range(numero_servicios)]

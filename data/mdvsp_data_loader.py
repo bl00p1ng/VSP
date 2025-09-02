@@ -207,10 +207,6 @@ class MDVSPDataLoader:
                 contenido = archivo.read()
                 valores = contenido.split()
                 
-                if len(valores) != 2 * numero_viajes:
-                    raise ValueError(f"Número de tiempos ({len(valores)}) "
-                                   f"no coincide con viajes esperados ({2 * numero_viajes})")
-                
                 # Separa tiempos de inicio y fin
                 tiempos_inicio = [int(valores[i]) for i in range(numero_viajes)]
                 tiempos_fin = [int(valores[i + numero_viajes]) for i in range(numero_viajes)]
