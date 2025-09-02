@@ -110,6 +110,7 @@ class VSPData:
             raise ValueError(f"Matriz debe ser {dimension_esperada}x{dimension_esperada}")
         
         # Reporta traslapes temporales pero no interrumpe la ejecución
+        # Los traslapes se manejan correctamente en _construir_matriz_vsp marcando conexiones como infactibles
         traslapes_detectados = 0
         for i in range(len(self.servicios)):
             for j in range(i + 1, len(self.servicios)):
@@ -202,6 +203,40 @@ class VSPData:
             raise IndexError("Índices fuera de rango")
         
         return float(self.matriz_costos[servicio_origen, servicio_destino])
+    
+    def obtener_costo_desde_deposito(self, servicio_destino: int) -> float:
+        """
+        Obtiene el costo de conexión desde el depósito hacia un servicio.
+        
+        Args:
+            servicio_destino: Índice del servicio destino
+            
+        Returns:
+            Costo desde el depósito al servicio
+        """
+        if not (0 <= servicio_destino < self.numero_servicios):
+            raise IndexError(f"Índice de servicio fuera de rango: {servicio_destino}")
+        
+        # El depósito está en el índice número_servicios
+        indice_deposito = self.numero_servicios
+        return float(self.matriz_costos[indice_deposito, servicio_destino])
+    
+    def obtener_costo_hacia_deposito(self, servicio_origen: int) -> float:
+        """
+        Obtiene el costo de conexión desde un servicio hacia el depósito.
+        
+        Args:
+            servicio_origen: Índice del servicio origen
+            
+        Returns:
+            Costo desde el servicio al depósito
+        """
+        if not (0 <= servicio_origen < self.numero_servicios):
+            raise IndexError(f"Índice de servicio fuera de rango: {servicio_origen}")
+        
+        # El depósito está en el índice número_servicios
+        indice_deposito = self.numero_servicios
+        return float(self.matriz_costos[servicio_origen, indice_deposito])
     
     def obtener_servicios_conectables_desde(self, servicio_origen: int) -> List[int]:
         """

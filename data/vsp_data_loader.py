@@ -88,20 +88,20 @@ class VSPDataLoader:
         try:
             # Carga datos básicos
             matriz_costos_base, deposito, numero_servicios = self._cargar_archivo_cst_individual(archivo_cst_path)
-            servicios = self._cargar_archivo_tim_individual(archivo_tim_path, numero_servicios)
+            servicios, numero_servicios_real = self._cargar_archivo_tim_individual(archivo_tim_path, numero_servicios)
             
-            # Construye matriz de costos con restricciones VSP
+            # Construye matriz de costos con restricciones VSP usando el número real de servicios
             matriz_costos_final = self._construir_matriz_vsp(
-                matriz_costos_base, deposito, servicios, numero_servicios
+                matriz_costos_base, deposito, servicios, numero_servicios_real
             )
             
             # Nombre de instancia basado en archivos
             nombre_instancia = archivo_cst_path.stem
             
-            # Crea la instancia VSP completa
+            # Crea la instancia VSP completa con el número real de servicios
             instancia = VSPData(
                 nombre_instancia=nombre_instancia,
-                numero_servicios=numero_servicios,
+                numero_servicios=numero_servicios_real,
                 deposito=deposito,
                 servicios=servicios,
                 matriz_costos=matriz_costos_final
@@ -355,12 +355,13 @@ class VSPDataLoader:
                              servicios: List[Servicio], numero_servicios: int) -> np.ndarray:
         """
         Construye la matriz de costos VSP aplicando todas las restricciones específicas.
+        Ajusta automáticamente el tamaño de la matriz si el número real de servicios difiere del esperado.
         
         Args:
             matriz_base: Matriz de costos básica leída del archivo
             deposito: Depósito del VSP
             servicios: Lista de servicios
-            numero_servicios: Número total de servicios
+            numero_servicios: Número real de servicios
             
         Returns:
             Matriz de costos final con todas las restricciones VSP aplicadas
@@ -368,17 +369,41 @@ class VSPDataLoader:
         INFACTIBLE = 100000000.0
         PROHIBIDO = 0.0
         
-        dimension_matriz = numero_servicios + 1  # +1 para el depósito
+        dimension_nueva = numero_servicios + 1  # +1 para el depósito
         restricciones_aplicadas = 0
-        
-        # Copia la matriz base para modificarla
-        matriz_final = matriz_base.copy()
         
         print(f"Construyendo matriz VSP: {numero_servicios} servicios + 1 depósito")
         
+        # Ajusta el tamaño de la matriz si es necesario
+        if matriz_base.shape[0] != dimension_nueva or matriz_base.shape[1] != dimension_nueva:
+            print(f"Ajustando matriz de {matriz_base.shape} a {dimension_nueva}x{dimension_nueva}")
+            matriz_ajustada = np.full((dimension_nueva, dimension_nueva), INFACTIBLE, dtype=float)
+            
+            # Copia los datos existentes hasta donde sea posible
+            filas_copiar = min(matriz_base.shape[0], dimension_nueva)
+            columnas_copiar = min(matriz_base.shape[1], dimension_nueva)
+            
+            matriz_ajustada[:filas_copiar, :columnas_copiar] = matriz_base[:filas_copiar, :columnas_copiar]
+            
+            # Para servicios nuevos que no estaban en la matriz original, asigna costos por defecto
+            for i in range(matriz_base.shape[0], numero_servicios):
+                for j in range(dimension_nueva):
+                    if j == numero_servicios:  # Conexión al depósito
+                        matriz_ajustada[i, j] = 1.0  # Costo mínimo para regresar al depósito
+                        matriz_ajustada[j, i] = 1.0  # Costo mínimo desde el depósito
+                    elif i != j:
+                        # Costo entre servicios nuevos: usar distancia euclidiana simple basada en tiempos
+                        if j < numero_servicios:
+                            costo_temporal = abs(servicios[i].tiempo_inicio - servicios[j].tiempo_fin)
+                            matriz_ajustada[i, j] = max(1.0, float(costo_temporal))
+            
+            matriz_final = matriz_ajustada
+        else:
+            matriz_final = matriz_base.copy()
+        
         # Aplica restricciones específicas del VSP
-        for i in range(dimension_matriz):
-            for j in range(dimension_matriz):
+        for i in range(dimension_nueva):
+            for j in range(dimension_nueva):
                 
                 # Índice del depósito es el último
                 indice_deposito = numero_servicios
