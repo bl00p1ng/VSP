@@ -109,11 +109,16 @@ class VSPData:
         if self.matriz_costos.shape != (dimension_esperada, dimension_esperada):
             raise ValueError(f"Matriz debe ser {dimension_esperada}x{dimension_esperada}")
         
-        # Valida que no haya servicios con traslapes temporales
+        # Reporta traslapes temporales pero no interrumpe la ejecución
+        traslapes_detectados = 0
         for i in range(len(self.servicios)):
             for j in range(i + 1, len(self.servicios)):
                 if self.servicios[i].se_traslapa_con(self.servicios[j]):
-                    raise ValueError(f"Servicios {i} y {j} tienen traslapes temporales")
+                    traslapes_detectados += 1
+        
+        if traslapes_detectados > 0:
+            print(f"Detectados {traslapes_detectados} pares de servicios con traslapes temporales "
+                  f"(se marcarán como conexiones infactibles)")
     
     def _construir_estructuras_optimizacion(self) -> None:
         """Construye estructuras auxiliares para optimización de consultas."""
@@ -190,152 +195,67 @@ class VSPData:
             servicio_destino: Índice del servicio destino
             
         Returns:
-            Costo de la conexión o COSTO_INFACTIBLE si no es factible
+            Costo de la conexión (100000000.0 si es infactible)
         """
-        if not self.es_conexion_factible(servicio_origen, servicio_destino):
-            return self.COSTO_INFACTIBLE
+        if not (0 <= servicio_origen <= self.numero_servicios and 
+                0 <= servicio_destino <= self.numero_servicios):
+            raise IndexError("Índices fuera de rango")
         
-        return self.matriz_costos[servicio_origen, servicio_destino]
+        return float(self.matriz_costos[servicio_origen, servicio_destino])
     
-    def obtener_costo_desde_deposito(self, servicio: int) -> float:
+    def obtener_servicios_conectables_desde(self, servicio_origen: int) -> List[int]:
         """
-        Obtiene el costo desde el depósito hasta un servicio.
-        
-        Args:
-            servicio: Índice del servicio
-            
-        Returns:
-            Costo desde depósito o COSTO_INFACTIBLE si no es factible
-        """
-        if not (0 <= servicio < self.numero_servicios):
-            raise IndexError("Índice de servicio fuera de rango")
-        
-        indice_deposito = self.numero_servicios  # Depósito es el último índice
-        return self.matriz_costos[indice_deposito, servicio]
-    
-    def obtener_costo_hacia_deposito(self, servicio: int) -> float:
-        """
-        Obtiene el costo desde un servicio hacia el depósito.
-        
-        Args:
-            servicio: Índice del servicio
-            
-        Returns:
-            Costo hacia depósito o COSTO_INFACTIBLE si no es factible
-        """
-        if not (0 <= servicio < self.numero_servicios):
-            raise IndexError("Índice de servicio fuera de rango")
-        
-        indice_deposito = self.numero_servicios  # Depósito es el último índice
-        return self.matriz_costos[servicio, indice_deposito]
-    
-    def obtener_servicios_sucesores(self, servicio_origen: int) -> List[int]:
-        """
-        Obtiene todos los servicios que pueden seguir al servicio dado.
+        Obtiene todos los servicios que pueden conectarse desde un servicio dado.
         
         Args:
             servicio_origen: Índice del servicio origen
             
         Returns:
-            Lista de índices de servicios sucesores factibles
+            Lista de índices de servicios factibles como destino
         """
-        sucesores = []
+        if not (0 <= servicio_origen <= self.numero_servicios):
+            raise IndexError(f"Índice de servicio fuera de rango: {servicio_origen}")
         
-        for servicio_destino in range(self.numero_servicios):
-            if self.es_conexion_factible(servicio_origen, servicio_destino):
-                sucesores.append(servicio_destino)
+        servicios_conectables = []
         
-        return sucesores
+        # Si es el depósito, puede conectar a cualquier servicio
+        if servicio_origen == self.numero_servicios:  # Depósito
+            for j in range(self.numero_servicios):
+                if self.matriz_costos[servicio_origen, j] < self.COSTO_INFACTIBLE:
+                    servicios_conectables.append(j)
+        else:
+            # Para servicios, incluye otros servicios y el depósito
+            for j in range(self.numero_servicios + 1):
+                if j != servicio_origen and self.matriz_costos[servicio_origen, j] < self.COSTO_INFACTIBLE:
+                    servicios_conectables.append(j)
+        
+        return servicios_conectables
     
-    def obtener_servicios_predecesores(self, servicio_destino: int) -> List[int]:
+    def obtener_servicios_que_conectan_a(self, servicio_destino: int) -> List[int]:
         """
-        Obtiene todos los servicios que pueden preceder al servicio dado.
+        Obtiene todos los servicios que pueden conectar hacia un servicio dado.
         
         Args:
             servicio_destino: Índice del servicio destino
             
         Returns:
-            Lista de índices de servicios predecesores factibles
+            Lista de índices de servicios que pueden conectar al destino
         """
-        predecesores = []
+        if not (0 <= servicio_destino <= self.numero_servicios):
+            raise IndexError(f"Índice de servicio fuera de rango: {servicio_destino}")
         
-        for servicio_origen in range(self.numero_servicios):
-            if self.es_conexion_factible(servicio_origen, servicio_destino):
-                predecesores.append(servicio_origen)
+        servicios_conectores = []
         
-        return predecesores
-    
-    def validar_secuencia_servicios(self, secuencia: List[int]) -> Tuple[bool, Optional[str]]:
-        """
-        Valida si una secuencia de servicios es factible.
+        # Verifica todos los posibles orígenes (servicios + depósito)
+        for i in range(self.numero_servicios + 1):
+            if i != servicio_destino and self.matriz_costos[i, servicio_destino] < self.COSTO_INFACTIBLE:
+                servicios_conectores.append(i)
         
-        Args:
-            secuencia: Lista ordenada de índices de servicios
-            
-        Returns:
-            Tuple (es_factible, mensaje_error)
-        """
-        if len(secuencia) <= 1:
-            return True, None
-        
-        # Verifica conexiones consecutivas
-        for i in range(len(secuencia) - 1):
-            servicio_actual = secuencia[i]
-            servicio_siguiente = secuencia[i + 1]
-            
-            if not self.es_conexion_factible(servicio_actual, servicio_siguiente):
-                return False, f"Conexión infactible entre servicios {servicio_actual} y {servicio_siguiente}"
-        
-        # Verifica que no haya servicios duplicados
-        if len(set(secuencia)) != len(secuencia):
-            return False, "Secuencia contiene servicios duplicados"
-        
-        return True, None
-    
-    def calcular_costo_secuencia(self, secuencia: List[int]) -> Optional[float]:
-        """
-        Calcula el costo total de una secuencia de servicios.
-        
-        Args:
-            secuencia: Lista ordenada de índices de servicios
-            
-        Returns:
-            Costo total o None si la secuencia es infactible
-        """
-        if not secuencia:
-            return 0.0
-        
-        # Valida la secuencia
-        es_factible, _ = self.validar_secuencia_servicios(secuencia)
-        if not es_factible:
-            return None
-        
-        costo_total = 0.0
-        
-        # Costo desde depósito al primer servicio
-        costo_inicial = self.obtener_costo_desde_deposito(secuencia[0])
-        if costo_inicial >= self.COSTO_INFACTIBLE:
-            return None
-        costo_total += costo_inicial
-        
-        # Costos entre servicios consecutivos
-        for i in range(len(secuencia) - 1):
-            costo_conexion = self.obtener_costo_conexion(secuencia[i], secuencia[i + 1])
-            if costo_conexion >= self.COSTO_INFACTIBLE:
-                return None
-            costo_total += costo_conexion
-        
-        # Costo desde último servicio al depósito
-        costo_final = self.obtener_costo_hacia_deposito(secuencia[-1])
-        if costo_final >= self.COSTO_INFACTIBLE:
-            return None
-        costo_total += costo_final
-        
-        return costo_total
+        return servicios_conectores
     
     def obtener_estadisticas(self) -> dict:
         """
-        Calcula estadísticas de la instancia VSP.
+        Calcula estadísticas detalladas de la instancia VSP.
         
         Returns:
             Diccionario con estadísticas detalladas
