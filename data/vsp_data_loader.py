@@ -19,7 +19,7 @@ class VSPDataLoader:
     Implementa restricciones de factibilidad temporal y de conexión.
     """
     
-    def __init__(self, directorio_instancias: str = "fischetti") -> None:
+    def __init__(self, directorio_instancias: str = "instancias_vsp") -> None:
         """
         Inicializa el cargador con el directorio de instancias.
         
@@ -374,6 +374,7 @@ class VSPDataLoader:
     def _cargar_archivo_cst_individual(self, archivo_cst: Path) -> Tuple[np.ndarray, DepositoVSP, int]:
         """
         Carga el archivo .cst individual con matriz de costos e información del depósito.
+        ADAPTADO: Detecta automáticamente si es formato MDVSP y lo convierte a VSP.
         
         Args:
             archivo_cst: Path al archivo .cst
@@ -383,34 +384,133 @@ class VSPDataLoader:
         """
         with open(archivo_cst, 'r', encoding='utf-8') as archivo:
             try:
-                # Lee la primera línea: num_servicios num_vehiculos_deposito
+                # Lee la primera línea
                 primera_linea = archivo.readline().strip().split()
                 
                 if len(primera_linea) < 2:
-                    raise ValueError("Primera línea debe contener número de servicios y vehículos")
+                    raise ValueError("Primera línea debe contener al menos 2 valores")
                 
-                numero_servicios = int(primera_linea[0])
-                numero_vehiculos = int(primera_linea[1])
+                # DETECCIÓN AUTOMÁTICA DEL FORMATO
+                if len(primera_linea) == 2:
+                    numero_servicios = int(primera_linea[0])
+                    numero_vehiculos = int(primera_linea[1])
+                    
+                    if numero_servicios <= 0 or numero_vehiculos <= 0:
+                        raise ValueError("Número de servicios y vehículos debe ser positivo")
+                    
+                    deposito = DepositoVSP(
+                        id_deposito=0,
+                        numero_vehiculos=numero_vehiculos,
+                        nombre_deposito=f"Deposito_{archivo_cst.stem}"
+                    )
+                    
+                    # Lee matriz VSP: (servicios + 1) x (servicios + 1)
+                    matriz_costos_base = self._leer_matriz_costos(archivo, numero_servicios + 1)
+                    
+                    return matriz_costos_base, deposito, numero_servicios
                 
-                if numero_servicios <= 0:
-                    raise ValueError("Número de servicios debe ser positivo")
-                if numero_vehiculos <= 0:
-                    raise ValueError("Número de vehículos debe ser positivo")
-                
-                # Crea el depósito único
-                deposito = DepositoVSP(
-                    id_deposito=0,
-                    numero_vehiculos=numero_vehiculos,
-                    nombre_deposito=f"Deposito_{archivo_cst.stem}"
-                )
-                
-                # Lee matriz de costos (servicios + 1 para depósito)
-                matriz_costos_base = self._leer_matriz_costos(archivo, numero_servicios + 1)
-                
-                return matriz_costos_base, deposito, numero_servicios
+                else:
+                    # FORMATO MDVSP: num_depositos num_viajes num_veh_dep1 num_veh_dep2 ...
+                    print(f"  Detectado formato MDVSP, convirtiendo a VSP...")
+                    
+                    numero_depositos = int(primera_linea[0])
+                    numero_viajes = int(primera_linea[1])  # Estos serán nuestros "servicios"
+                    
+                    if numero_depositos <= 0 or numero_viajes <= 0:
+                        raise ValueError("Número de depósitos y viajes debe ser positivo")
+                    
+                    if len(primera_linea) != (2 + numero_depositos):
+                        raise ValueError(f"Primera línea debe contener {2 + numero_depositos} valores para formato MDVSP")
+                    
+                    # Suma todos los vehículos de todos los depósitos
+                    numero_total_vehiculos = sum(int(primera_linea[2 + i]) for i in range(numero_depositos))
+                    
+                    deposito_vsp = DepositoVSP(
+                        id_deposito=0,
+                        numero_vehiculos=numero_total_vehiculos,
+                        nombre_deposito=f"DepositoUnificado_{archivo_cst.stem}"
+                    )
+                    
+                    # Lee matriz MDVSP completa: (depositos + viajes) x (depositos + viajes) 
+                    dimension_mdvsp = numero_depositos + numero_viajes
+                    matriz_mdvsp = self._leer_matriz_costos(archivo, dimension_mdvsp)
+                    
+                    # CONVIERTE matriz MDVSP a formato VSP
+                    matriz_vsp = self._convertir_matriz_mdvsp_a_vsp(
+                        matriz_mdvsp, numero_depositos, numero_viajes
+                    )
+                    
+                    print(f"  Conversión completada: {numero_viajes} viajes -> servicios, {numero_total_vehiculos} vehículos total")
+                    
+                    return matriz_vsp, deposito_vsp, numero_viajes
                 
             except (ValueError, IndexError) as e:
                 raise ValueError(f"Error en formato del archivo {archivo_cst}: {str(e)}") from e
+    
+    def _convertir_matriz_mdvsp_a_vsp(self, matriz_mdvsp: np.ndarray, 
+                                     numero_depositos: int, numero_viajes: int) -> np.ndarray:
+        """
+        Convierte una matriz MDVSP a formato VSP.
+        
+        MDVSP: [Viajes | Depositos]  ->  VSP: [Servicios | Deposito_Unificado]
+               [Viajes | Depositos]           [Servicios | Deposito_Unificado]
+        
+        Args:
+            matriz_mdvsp: Matriz MDVSP original
+            numero_depositos: Número de depósitos en MDVSP
+            numero_viajes: Número de viajes (que serán servicios en VSP)
+            
+        Returns:
+            Matriz VSP de tamaño (numero_viajes + 1) x (numero_viajes + 1)
+        """
+        INFACTIBLE = 100000000.0
+        
+        # Crea matriz VSP: servicios + 1 depósito unificado
+        dimension_vsp = numero_viajes + 1
+        matriz_vsp = np.full((dimension_vsp, dimension_vsp), INFACTIBLE, dtype=np.float64)
+        
+        # PASO 1: Copia la submatriz viaje-viaje (servicios entre sí)
+        for i in range(numero_viajes):
+            for j in range(numero_viajes):
+                matriz_vsp[i, j] = matriz_mdvsp[i, j]
+        
+        # PASO 2: Calcula costos desde depósito unificado a servicios
+        # Usa el MÍNIMO costo de todos los depósitos MDVSP
+        indice_deposito_vsp = numero_viajes  # Último índice
+        
+        for servicio in range(numero_viajes):
+            # Costo mínimo desde cualquier depósito MDVSP al servicio
+            costos_depositos_a_servicio = []
+            for dep in range(numero_depositos):
+                indice_dep_mdvsp = numero_viajes + dep
+                costo = matriz_mdvsp[indice_dep_mdvsp, servicio]
+                if costo < INFACTIBLE:
+                    costos_depositos_a_servicio.append(costo)
+            
+            if costos_depositos_a_servicio:
+                matriz_vsp[indice_deposito_vsp, servicio] = min(costos_depositos_a_servicio)
+            else:
+                matriz_vsp[indice_deposito_vsp, servicio] = INFACTIBLE
+        
+        # PASO 3: Calcula costos desde servicios al depósito unificado  
+        for servicio in range(numero_viajes):
+            # Costo mínimo desde servicio a cualquier depósito MDVSP
+            costos_servicio_a_depositos = []
+            for dep in range(numero_depositos):
+                indice_dep_mdvsp = numero_viajes + dep
+                costo = matriz_mdvsp[servicio, indice_dep_mdvsp]
+                if costo < INFACTIBLE:
+                    costos_servicio_a_depositos.append(costo)
+            
+            if costos_servicio_a_depositos:
+                matriz_vsp[servicio, indice_deposito_vsp] = min(costos_servicio_a_depositos)
+            else:
+                matriz_vsp[servicio, indice_deposito_vsp] = INFACTIBLE
+        
+        # PASO 4: Depósito a sí mismo (infactible)
+        matriz_vsp[indice_deposito_vsp, indice_deposito_vsp] = INFACTIBLE
+        
+        return matriz_vsp
     
     def _cargar_archivo_tim_individual(self, archivo_tim: Path, numero_servicios: int) -> List[Servicio]:
         """
